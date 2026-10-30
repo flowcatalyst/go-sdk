@@ -1,0 +1,374 @@
+package client
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// ─── Request DTOs ────────────────────────────────────────────────────
+
+// CreateUserRequest — POST /api/principals/users.
+type CreateUserRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password,omitempty"`
+	Name     string `json:"name"`
+	ClientID string `json:"clientId,omitempty"`
+	// EnforcePasswordComplexity: pass *false to skip the platform's
+	// upper/lower/digit/special rules (2-char minimum still applies).
+	// Use when your application enforces its own password policy.
+	EnforcePasswordComplexity *bool `json:"enforcePasswordComplexity,omitempty"`
+	// Scope is ANCHOR, PARTNER or CLIENT; empty lets the platform derive it
+	// (CLIENT unless the email domain maps to ANCHOR or PARTNER).
+	Scope string `json:"scope,omitempty"`
+	// SendInvitation emails the user an invitation to set their password.
+	SendInvitation *bool `json:"sendInvitation,omitempty"`
+	// ReturnInviteLink returns the invitation link in
+	// PrincipalResponse.InviteLink instead of relying on email delivery.
+	ReturnInviteLink *bool `json:"returnInviteLink,omitempty"`
+	// InviteRedirectURI is where the invitation flow sends the user once
+	// they have set their password.
+	InviteRedirectURI string `json:"inviteRedirectUri,omitempty"`
+}
+
+// UpdatePrincipalRequest — PUT /api/principals/{id}.
+type UpdatePrincipalRequest struct {
+	Name   *string `json:"name,omitempty"`
+	Email  *string `json:"email,omitempty"`
+	Active *bool   `json:"active,omitempty"`
+}
+
+// ResetPasswordRequest — POST /api/principals/{id}/reset-password.
+type ResetPasswordRequest struct {
+	NewPassword               string `json:"newPassword"`
+	EnforcePasswordComplexity *bool  `json:"enforcePasswordComplexity,omitempty"`
+}
+
+// AssignRoleRequest — body for POST /api/principals/{id}/roles. The
+// backend expects { role }, not { roleName }.
+type AssignRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// ReplaceRolesRequest — body for PUT /api/principals/{id}/roles.
+type ReplaceRolesRequest struct {
+	Roles []string `json:"roles"`
+}
+
+// GrantClientAccessRequest — body for POST /api/principals/{id}/client-access.
+type GrantClientAccessRequest struct {
+	ClientID string `json:"clientId"`
+}
+
+// PrincipalFilters — query parameters for GET /api/principals.
+type PrincipalFilters struct {
+	ClientID string
+	Type     string
+	Active   string
+	// Email is sent as `q`, the platform's case-insensitive substring search
+	// over name and email; it is not an exact-match filter.
+	Email string
+	// Roles filters to principals holding the role(s) (the platform's `roles`
+	// parameter; comma-separated for several).
+	Roles string
+	// Page and PageSize page the listing; nil takes the platform default.
+	Page     *uint32
+	PageSize *uint32
+	// SortField and SortOrder order it (SortOrder is "asc" or "desc").
+	SortField string
+	SortOrder string
+}
+
+// ─── Response DTOs ───────────────────────────────────────────────────
+
+// PrincipalResponse is the platform's principal aggregate.
+type PrincipalResponse struct {
+	ID               string   `json:"id"`
+	PrincipalType    string   `json:"type"`
+	Scope            string   `json:"scope"`
+	ClientID         string   `json:"clientId,omitempty"`
+	Name             string   `json:"name"`
+	Active           bool     `json:"active"`
+	Email            string   `json:"email,omitempty"`
+	IdpType          string   `json:"idpType,omitempty"`
+	Roles            []string `json:"roles,omitempty"`
+	IsAnchorUser     bool     `json:"isAnchorUser,omitempty"`
+	GrantedClientIDs []string `json:"grantedClientIds,omitempty"`
+	// ServiceAccountID is set for SERVICE principals.
+	ServiceAccountID string `json:"serviceAccountId,omitempty"`
+	// HasDeveloperCredential reports whether a developer credential is set.
+	HasDeveloperCredential       bool     `json:"hasDeveloperCredential"`
+	DeveloperCredentialUpdatedAt string   `json:"developerCredentialUpdatedAt,omitempty"`
+	TwoFactorMethods             []string `json:"twoFactorMethods,omitempty"`
+	// InviteLink is set only on the create-user response, when
+	// CreateUserRequest.ReturnInviteLink was requested.
+	InviteLink string `json:"inviteLink,omitempty"`
+	CreatedAt  string `json:"createdAt"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+// PrincipalListResponse — GET /api/principals.
+type PrincipalListResponse struct {
+	Principals []PrincipalResponse `json:"principals"`
+	Total      uint64              `json:"total,omitempty"`
+}
+
+// PrincipalRoleResponse — one item from GET /api/principals/{id}/roles.
+// Matches the platform's RoleAssignmentDto.
+type PrincipalRoleResponse struct {
+	ID               string `json:"id"`
+	RoleName         string `json:"roleName"`
+	AssignmentSource string `json:"assignmentSource"`
+	AssignedAt       string `json:"assignedAt"`
+}
+
+// PrincipalRoleListResponse — GET /api/principals/{id}/roles.
+type PrincipalRoleListResponse struct {
+	Roles []PrincipalRoleResponse `json:"roles"`
+}
+
+// SetRolesResponse — PUT /api/principals/{id}/roles: the role names added and
+// removed by the replace, and the resulting assignments.
+type SetRolesResponse struct {
+	Added   []string                `json:"added"`
+	Removed []string                `json:"removed"`
+	Roles   []PrincipalRoleResponse `json:"roles"`
+}
+
+// SyncUsersResult — the response of POST /api/principals/sync. Unlike the
+// per-application syncs it names the synced principals by email, and carries
+// no application code.
+type SyncUsersResult struct {
+	Created      uint32   `json:"created"`
+	Updated      uint32   `json:"updated"`
+	Deleted      uint32   `json:"deleted"`
+	SyncedEmails []string `json:"syncedEmails"`
+	// PasswordHashIgnored lists the emails (lower-cased) whose passwordHash
+	// was ignored because the user already exists.
+	PasswordHashIgnored []string `json:"passwordHashIgnored,omitempty"`
+}
+
+// ClientAccessGrantResponse — one item from GET /api/principals/{id}/client-access.
+type ClientAccessGrantResponse struct {
+	ID        string `json:"id"`
+	ClientID  string `json:"clientId"`
+	GrantedAt string `json:"grantedAt"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+}
+
+// ClientAccessListResponse — GET /api/principals/{id}/client-access.
+type ClientAccessListResponse struct {
+	Grants []ClientAccessGrantResponse `json:"grants"`
+}
+
+// ─── Sync ────────────────────────────────────────────────────────────
+
+// SyncPrincipalItem — one entry in the per-app sync payload. Matched by
+// email. Role names omit the `<app>:` prefix — the platform adds it.
+type SyncPrincipalItem struct {
+	Email  string   `json:"email"`
+	Name   string   `json:"name"`
+	Roles  []string `json:"roles,omitempty"`
+	Active bool     `json:"active"`
+	// PasswordHash carries an already-hashed credential (e.g. an upstream
+	// Laravel bcrypt/argon2i hash) so a migrated user keeps their existing
+	// password. Stored verbatim by the platform — NOT re-hashed; the login
+	// flow verifies it and re-encodes it to the native scheme on first login.
+	// Omit (nil) for OIDC users or to leave an existing password untouched.
+	PasswordHash *string `json:"passwordHash,omitempty"`
+}
+
+// SyncPrincipalsRequest — body for the per-app sync endpoint.
+type SyncPrincipalsRequest struct {
+	Principals []SyncPrincipalItem `json:"principals"`
+}
+
+// ─── Resource ────────────────────────────────────────────────────────
+
+// PrincipalsResource — /api/principals/*.
+type PrincipalsResource struct {
+	c *FlowCatalystClient
+}
+
+// CreateUser — POST /api/principals/users.
+func (r *PrincipalsResource) CreateUser(ctx context.Context, req *CreateUserRequest) (*PrincipalResponse, error) {
+	var out PrincipalResponse
+	if err := r.c.Post(ctx, "/api/principals/users", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// List — GET /api/principals with optional filters.
+func (r *PrincipalsResource) List(ctx context.Context, filters *PrincipalFilters) (*PrincipalListResponse, error) {
+	q := ""
+	if filters != nil {
+		q = NewQuery().
+			String("clientId", filters.ClientID).
+			String("type", filters.Type).
+			String("active", filters.Active).
+			String("q", filters.Email).
+			String("roles", filters.Roles).
+			Uint32("page", filters.Page).
+			Uint32("pageSize", filters.PageSize).
+			String("sortField", filters.SortField).
+			String("sortOrder", filters.SortOrder).
+			Encode()
+	}
+	var out PrincipalListResponse
+	if err := r.c.Get(ctx, "/api/principals"+q, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Get — GET /api/principals/{id}.
+func (r *PrincipalsResource) Get(ctx context.Context, id string) (*PrincipalResponse, error) {
+	var out PrincipalResponse
+	if err := r.c.Get(ctx, "/api/principals/"+id, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// FindByEmail — convenience over List. The platform only offers a substring
+// search (`q`), so the result is narrowed client-side to principals whose
+// email equals the argument (case-insensitive). Callers should pick the
+// expected one by email rather than assuming index 0.
+func (r *PrincipalsResource) FindByEmail(ctx context.Context, email string) (*PrincipalListResponse, error) {
+	out, err := r.List(ctx, &PrincipalFilters{Email: email})
+	if err != nil {
+		return nil, err
+	}
+	exact := make([]PrincipalResponse, 0, len(out.Principals))
+	for i := range out.Principals {
+		if strings.EqualFold(out.Principals[i].Email, email) {
+			exact = append(exact, out.Principals[i])
+		}
+	}
+	out.Principals = exact
+	out.Total = uint64(len(exact))
+	return out, nil
+}
+
+// Update — PUT /api/principals/{id}.
+func (r *PrincipalsResource) Update(ctx context.Context, id string, req *UpdatePrincipalRequest) (*PrincipalResponse, error) {
+	var out PrincipalResponse
+	if err := r.c.Put(ctx, "/api/principals/"+id, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Activate — POST /api/principals/{id}/activate. Platform returns
+// { message } only; call Get(id) for the refreshed record.
+func (r *PrincipalsResource) Activate(ctx context.Context, id string) error {
+	return r.c.Post(ctx, "/api/principals/"+id+"/activate", nil, nil)
+}
+
+// Deactivate — POST /api/principals/{id}/deactivate. Like Activate, the
+// { message } response is discarded.
+func (r *PrincipalsResource) Deactivate(ctx context.Context, id string) error {
+	return r.c.Post(ctx, "/api/principals/"+id+"/deactivate", nil, nil)
+}
+
+// Roles — GET /api/principals/{id}/roles.
+func (r *PrincipalsResource) Roles(ctx context.Context, id string) (*PrincipalRoleListResponse, error) {
+	var out PrincipalRoleListResponse
+	if err := r.c.Get(ctx, "/api/principals/"+id+"/roles", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AddRole — POST /api/principals/{id}/roles (additive — keeps existing
+// roles). Distinct from SetRoles which replaces the full set. Returns the
+// updated principal.
+func (r *PrincipalsResource) AddRole(ctx context.Context, id, roleName string) (*PrincipalResponse, error) {
+	var out PrincipalResponse
+	if err := r.c.Post(ctx, "/api/principals/"+id+"/roles", &AssignRoleRequest{Role: roleName}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RemoveRole — DELETE /api/principals/{id}/roles/{roleName}. Returns the
+// updated principal.
+func (r *PrincipalsResource) RemoveRole(ctx context.Context, id, roleName string) (*PrincipalResponse, error) {
+	var out PrincipalResponse
+	if err := r.c.Delete(ctx, fmt.Sprintf("/api/principals/%s/roles/%s", id, roleName), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetRoles — PUT /api/principals/{id}/roles. Replaces the full set; the
+// response says what was added and removed.
+func (r *PrincipalsResource) SetRoles(ctx context.Context, id string, roles []string) (*SetRolesResponse, error) {
+	var out SetRolesResponse
+	if err := r.c.Put(ctx, "/api/principals/"+id+"/roles", &ReplaceRolesRequest{Roles: roles}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ClientAccessGrants — GET /api/principals/{id}/client-access.
+func (r *PrincipalsResource) ClientAccessGrants(ctx context.Context, id string) (*ClientAccessListResponse, error) {
+	var out ClientAccessListResponse
+	if err := r.c.Get(ctx, "/api/principals/"+id+"/client-access", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GrantClientAccess — POST /api/principals/{id}/client-access. Returns the
+// grant.
+func (r *PrincipalsResource) GrantClientAccess(ctx context.Context, principalID, clientID string) (*ClientAccessGrantResponse, error) {
+	var out ClientAccessGrantResponse
+	if err := r.c.Post(ctx, "/api/principals/"+principalID+"/client-access",
+		&GrantClientAccessRequest{ClientID: clientID}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RevokeClientAccess — DELETE /api/principals/{id}/client-access/{clientId}.
+func (r *PrincipalsResource) RevokeClientAccess(ctx context.Context, principalID, clientID string) error {
+	return r.c.Delete(ctx,
+		fmt.Sprintf("/api/principals/%s/client-access/%s", principalID, clientID), nil)
+}
+
+// ResetPassword — POST /api/principals/{id}/reset-password. The platform
+// answers { message } only, which this discards.
+func (r *PrincipalsResource) ResetPassword(ctx context.Context, principalID string, req *ResetPasswordRequest) error {
+	return r.c.Post(ctx, "/api/principals/"+principalID+"/reset-password", req, nil)
+}
+
+// Sync — POST /api/applications/{appCode}/principals/sync. When
+// removeUnlisted is true the platform strips SDK-sourced role
+// assignments from principals not in the list (principals themselves
+// are never deleted by sync).
+func (r *PrincipalsResource) Sync(ctx context.Context, appCode string, req *SyncPrincipalsRequest, removeUnlisted bool) (*SyncResult, error) {
+	q := ""
+	if removeUnlisted {
+		q = "?removeUnlisted=true"
+	}
+	var out SyncResult
+	if err := r.c.Post(ctx, fmt.Sprintf("/api/applications/%s/principals/sync%s", appCode, q), req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SyncUsers — POST /api/principals/sync. The application-less twin of Sync:
+// a declarative user upsert keyed on email with NO application scope. Use it to
+// "just sync users" — migrating accounts and (via SyncPrincipalItem.PasswordHash)
+// their existing password hashes — without wrapping the call in an application.
+// Pure upsert: it never strips roles from unlisted users.
+func (r *PrincipalsResource) SyncUsers(ctx context.Context, req *SyncPrincipalsRequest) (*SyncUsersResult, error) {
+	var out SyncUsersResult
+	if err := r.c.Post(ctx, "/api/principals/sync", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

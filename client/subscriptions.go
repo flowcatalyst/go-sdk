@@ -1,0 +1,204 @@
+package client
+
+import (
+	"context"
+	"fmt"
+)
+
+// SubscriptionListResponse — GET /api/subscriptions.
+type SubscriptionListResponse struct {
+	Subscriptions []SubscriptionResponse `json:"subscriptions"`
+	Total         uint64                 `json:"total,omitempty"`
+}
+
+// ConfigEntry is a per-subscription custom config key/value.
+type ConfigEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// EventTypeBinding pairs an event type code/pattern with an optional
+// filter expression. Patterns support `*` wildcards per segment.
+type EventTypeBinding struct {
+	EventTypeCode string `json:"eventTypeCode"`
+	// EventTypeID and SpecVersion pin the binding to an event type row and
+	// schema version; both are optional.
+	EventTypeID string `json:"eventTypeId,omitempty"`
+	Filter      string `json:"filter,omitempty"`
+	SpecVersion string `json:"specVersion,omitempty"`
+}
+
+// CreateSubscriptionRequest — POST /api/subscriptions.
+type CreateSubscriptionRequest struct {
+	Code             string             `json:"code"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description,omitempty"`
+	Endpoint         string             `json:"endpoint"`
+	ConnectionID     string             `json:"connectionId,omitempty"`
+	EventTypes       []EventTypeBinding `json:"eventTypes,omitempty"`
+	ClientID         string             `json:"clientId,omitempty"`
+	DispatchPoolID   string             `json:"dispatchPoolId,omitempty"`
+	ServiceAccountID string             `json:"serviceAccountId,omitempty"`
+	Mode             string             `json:"mode,omitempty"`
+	TimeoutSeconds   *uint32            `json:"timeoutSeconds,omitempty"`
+	MaxRetries       *uint32            `json:"maxRetries,omitempty"`
+	DataOnly         bool               `json:"dataOnly,omitempty"`
+	// ClientScoped scopes the subscription to ClientID.
+	ClientScoped  bool          `json:"clientScoped,omitempty"`
+	CustomConfig  []ConfigEntry `json:"customConfig,omitempty"`
+	MaxAgeSeconds *uint32       `json:"maxAgeSeconds,omitempty"`
+	DelaySeconds  *uint32       `json:"delaySeconds,omitempty"`
+	Sequence      *int32        `json:"sequence,omitempty"`
+	Queue         string        `json:"queue,omitempty"`
+}
+
+// UpdateSubscriptionRequest — PUT /api/subscriptions/{id}.
+type UpdateSubscriptionRequest struct {
+	Name           *string `json:"name,omitempty"`
+	Description    *string `json:"description,omitempty"`
+	Endpoint       *string `json:"endpoint,omitempty"`
+	ConnectionID   *string `json:"connectionId,omitempty"`
+	TimeoutSeconds *uint32 `json:"timeoutSeconds,omitempty"`
+	MaxRetries     *uint32 `json:"maxRetries,omitempty"`
+	// The members below replace the stored value when non-nil.
+	EventTypes       *[]EventTypeBinding `json:"eventTypes,omitempty"`
+	CustomConfig     *[]ConfigEntry      `json:"customConfig,omitempty"`
+	DispatchPoolID   *string             `json:"dispatchPoolId,omitempty"`
+	ServiceAccountID *string             `json:"serviceAccountId,omitempty"`
+	Mode             *string             `json:"mode,omitempty"`
+	DataOnly         *bool               `json:"dataOnly,omitempty"`
+	MaxAgeSeconds    *uint32             `json:"maxAgeSeconds,omitempty"`
+	DelaySeconds     *uint32             `json:"delaySeconds,omitempty"`
+	Queue            *string             `json:"queue,omitempty"`
+}
+
+// SubscriptionResponse is the platform's subscription representation.
+type SubscriptionResponse struct {
+	ID               string             `json:"id"`
+	Code             string             `json:"code"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description,omitempty"`
+	ClientID         string             `json:"clientId,omitempty"`
+	ClientIdentifier string             `json:"clientIdentifier,omitempty"`
+	EventTypes       []EventTypeBinding `json:"eventTypes,omitempty"`
+	Endpoint         string             `json:"endpoint"`
+	ConnectionID     string             `json:"connectionId,omitempty"`
+	Queue            string             `json:"queue,omitempty"`
+	Source           string             `json:"source,omitempty"`
+	Status           string             `json:"status"`
+	MaxAgeSeconds    uint32             `json:"maxAgeSeconds,omitempty"`
+	DispatchPoolID   string             `json:"dispatchPoolId,omitempty"`
+	DispatchPoolCode string             `json:"dispatchPoolCode,omitempty"`
+	DelaySeconds     uint32             `json:"delaySeconds,omitempty"`
+	Sequence         int32              `json:"sequence,omitempty"`
+	Mode             string             `json:"mode"`
+	TimeoutSeconds   uint32             `json:"timeoutSeconds,omitempty"`
+	MaxRetries       uint32             `json:"maxRetries,omitempty"`
+	ServiceAccountID string             `json:"serviceAccountId,omitempty"`
+	DataOnly         bool               `json:"dataOnly,omitempty"`
+	ApplicationCode  string             `json:"applicationCode,omitempty"`
+	ClientScoped     bool               `json:"clientScoped,omitempty"`
+	CustomConfig     []ConfigEntry      `json:"customConfig,omitempty"`
+	CreatedBy        string             `json:"createdBy,omitempty"`
+	CreatedAt        string             `json:"createdAt"`
+	UpdatedAt        string             `json:"updatedAt"`
+}
+
+// SyncSubscriptionItem matches the platform's SyncSubscriptionInput.
+type SyncSubscriptionItem struct {
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	Target       string `json:"target"`
+	ConnectionID string `json:"connectionId,omitempty"`
+	// ConnectionCode names the delivering connection by code, stable across
+	// environments (prefer it to ConnectionID). It resolves among this
+	// application's connections, or among the shared (application-less)
+	// ones when SharedConnection is set; a client-scoped sync prefers its
+	// client's connection and falls back to a global one.
+	ConnectionCode   string             `json:"connectionCode,omitempty"`
+	SharedConnection bool               `json:"sharedConnection,omitempty"`
+	EventTypes       []EventTypeBinding `json:"eventTypes"`
+	DispatchPoolCode string             `json:"dispatchPoolCode,omitempty"`
+	Mode             string             `json:"mode,omitempty"`
+	MaxRetries       *uint32            `json:"maxRetries,omitempty"`
+	TimeoutSeconds   *uint32            `json:"timeoutSeconds,omitempty"`
+	DataOnly         bool               `json:"dataOnly,omitempty"`
+}
+
+// SyncSubscriptionsRequest — body for the per-app sync endpoint. ClientID
+// scopes the batch to one client: its id or its identifier slug (prefer the
+// slug: ids differ per environment). Empty syncs global subscriptions.
+type SyncSubscriptionsRequest struct {
+	ClientID      string                 `json:"clientId,omitempty"`
+	Subscriptions []SyncSubscriptionItem `json:"subscriptions"`
+}
+
+// SubscriptionsResource — /api/subscriptions/*.
+type SubscriptionsResource struct {
+	c *FlowCatalystClient
+}
+
+// Create — POST /api/subscriptions. Returns the new subscription's id; call
+// Get for the subscription.
+func (r *SubscriptionsResource) Create(ctx context.Context, req *CreateSubscriptionRequest) (*CreatedResponse, error) {
+	var out CreatedResponse
+	if err := r.c.Post(ctx, "/api/subscriptions", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Get — GET /api/subscriptions/{id}.
+func (r *SubscriptionsResource) Get(ctx context.Context, id string) (*SubscriptionResponse, error) {
+	var out SubscriptionResponse
+	if err := r.c.Get(ctx, "/api/subscriptions/"+id, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// List — GET /api/subscriptions?clientId=&status=.
+func (r *SubscriptionsResource) List(ctx context.Context, clientID, status string) (*SubscriptionListResponse, error) {
+	q := EncodeQuery("clientId", clientID, "status", status)
+	var out SubscriptionListResponse
+	if err := r.c.Get(ctx, "/api/subscriptions"+q, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Update — PUT /api/subscriptions/{id}. The platform answers 204 No
+// Content; call Get(id) for the updated subscription.
+func (r *SubscriptionsResource) Update(ctx context.Context, id string, req *UpdateSubscriptionRequest) error {
+	return r.c.Put(ctx, "/api/subscriptions/"+id, req, nil)
+}
+
+// Pause — POST /api/subscriptions/{id}/pause.
+func (r *SubscriptionsResource) Pause(ctx context.Context, id string) error {
+	return r.c.Post(ctx, "/api/subscriptions/"+id+"/pause", nil, nil)
+}
+
+// Resume — POST /api/subscriptions/{id}/resume.
+func (r *SubscriptionsResource) Resume(ctx context.Context, id string) error {
+	return r.c.Post(ctx, "/api/subscriptions/"+id+"/resume", nil, nil)
+}
+
+// Delete — DELETE /api/subscriptions/{id}.
+func (r *SubscriptionsResource) Delete(ctx context.Context, id string) error {
+	return r.c.Delete(ctx, "/api/subscriptions/"+id, nil)
+}
+
+// Sync — POST /api/applications/{appCode}/subscriptions/sync.
+func (r *SubscriptionsResource) Sync(ctx context.Context, appCode string, req *SyncSubscriptionsRequest, removeUnlisted bool) (*SyncResult, error) {
+	q := ""
+	if removeUnlisted {
+		q = "?removeUnlisted=true"
+	}
+	var out SyncResult
+	path := fmt.Sprintf("/api/applications/%s/subscriptions/sync%s", appCode, q)
+	if err := r.c.Post(ctx, path, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
