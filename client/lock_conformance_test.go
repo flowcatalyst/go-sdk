@@ -51,7 +51,7 @@ func lockCases() []lockCase {
 			return c.FieldWorkers().Ensure(ctx, &client.EnsureFieldWorkerRequest{ClientID: "clt_1", WorkerCode: "w1", Name: "W", Email: new("w@x.io"), AppCodes: []string{"a"}, Pin: new("123456")})
 		}},
 		{name: "FieldWorkers.List", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
-			return c.FieldWorkers().List(ctx, "clt_1", &client.FieldWorkerFilters{Q: "w", AppCode: "a", Status: "ACTIVE", Page: new(uint32(1)), PageSize: new(uint32(5))})
+			return c.FieldWorkers().List(ctx, "clt_1", &client.FieldWorkerFilters{Q: "w", AppCode: "a", Status: "ACTIVE", IsTest: new(true), Page: new(uint32(1)), PageSize: new(uint32(5))})
 		}},
 		{name: "FieldWorkers.Get", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
 			return c.FieldWorkers().Get(ctx, "fwk_1")
@@ -79,6 +79,21 @@ func lockCases() []lockCase {
 		}},
 		{name: "FieldWorkers.RevokeApp", discardsBody: true, call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
 			return nil, c.FieldWorkers().RevokeApp(ctx, "fwk_1", "orders")
+		}},
+		{name: "FieldWorkers.IssueBadge", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
+			return c.FieldWorkers().IssueBadge(ctx, "fwk_1", &client.IssueFieldBadgeRequest{Label: "L"})
+		}},
+		{name: "FieldWorkers.ListBadges", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
+			return c.FieldWorkers().ListBadges(ctx, "fwk_1")
+		}},
+		{name: "FieldWorkers.RevokeBadge", discardsBody: true, call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
+			return nil, c.FieldWorkers().RevokeBadge(ctx, "fwk_1", "fbg_1")
+		}},
+		{name: "FieldWorkers.BulkIssueBadges", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
+			return c.FieldWorkers().BulkIssueBadges(ctx, []string{"fwk_1"})
+		}},
+		{name: "FieldWorkers.CreateSignInCode", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
+			return c.FieldWorkers().CreateSignInCode(ctx, "fwk_1", "orders")
 		}},
 		{name: "FieldWorkers.SignIns", call: func(ctx context.Context, c *client.FlowCatalystClient) (any, error) {
 			return c.FieldWorkers().SignIns(ctx, "fwk_1", new(uint32(1)), new(uint32(5)))
