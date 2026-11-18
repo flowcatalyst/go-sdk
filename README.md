@@ -254,7 +254,8 @@ c := client.New("https://api.flowcatalyst.io", client.WithTokenProvider(cc.Token
 types, err := c.EventTypes().List(ctx, &client.EventTypeFilters{Application: "orders"})
 ```
 
-`client` retries transient 5xx and returns `*client.APIError` for non-2xx.
+`client` returns `*client.APIError` for non-2xx and retries what is safe to
+retry (below).
 `auth.NewTokenValidator` validates incoming RS256 bearer tokens through OIDC
 discovery and a cached JWKS; `auth.OAuthClient` does PKCE, refresh, revoke,
 introspect, userinfo and RP-initiated logout. See `examples/list-event-types`.
@@ -265,6 +266,48 @@ resume, enable, disable) returns only an `error`; a create route that answers
 `{ "id" }` returns `*client.CreatedResponse` (call `Get` for the record); and
 a route that answers a body returns it. `go test ./client/` checks all of this
 against `api/openapi.lock.json`.
+
+### Retries
+
+`client.WithRetry(attempts, baseDelay)` sets the total number of attempts
+(default 3; 0 or 1 turns retries off) and the base of the exponential delay
+(default 100ms). `client.WithTimeout` bounds each attempt (default 30s); the
+caller's context bounds the whole call and, when it ends, nothing is retried.
+
+What is retried depends on whether the request is **repeatable**: GET, HEAD,
+OPTIONS, PUT and DELETE are; a POST is only when its method marks it, which
+the SDK does for the declarative syncs (every `Sync`, `Principals.SyncUsers`),
+`FieldTokens.Introspect` and `Router.InPipelineBatch`. PATCH and every other
+POST (create, provision, activate, suspend, fire, reset, ...) are not.
+
+| What happened | Repeatable | Not repeatable |
+|---|---|---|
+| 408, 425, 429 | retried | retried |
+| 500 | retried | returned as `*APIError` |
+| 502, 503, 504 | retried | `*OutcomeUnknownError`, not sent again |
+| transport failure before sending (DNS, connection refused, dial or TLS handshake failure, connect timeout) | retried | retried |
+| transport failure after sending (reset, EOF, the attempt's timeout) | retried | `*OutcomeUnknownError`, not sent again |
+| any other status | returned | returned |
+
+`*client.OutcomeUnknownError` means the platform may have applied the request
+and its answer was lost. It carries `Method`, `URL`, `StatusCode` (0 for a
+transport failure), `Body` and `Err`, and unwraps to the `*APIError` or the
+transport error. Check with `client.IsOutcomeUnknown(err)`, then read the state
+before deciding to send again:
+
+```go
+res, err := c.Applications().ProvisionServiceAccount(ctx, appID)
+if client.IsOutcomeUnknown(err) {
+	sa, getErr := c.Applications().GetServiceAccount(ctx, appID)
+	// found: it was provisioned, and its one-time secrets are lost (rotate them);
+	// a 404: it was not, and provisioning again is safe.
+}
+```
+
+A DELETE whose earlier attempt ended with an unknown outcome and whose retry
+answers 404 succeeds (the first attempt most likely deleted it); a 404 on the
+first attempt is still an error. `c.PostRepeatable` is `c.Post` for a custom
+POST the caller knows is safe to send twice.
 
 ### Ingestions
 
@@ -448,7 +491,43 @@ this tree through `replace ... => ./pkg/fcsdk`. The SDK imports nothing from
 the platform. Wire references: `docs/wire-contract.md`, the OpenAPI lock
 `api/openapi.lock.json`.
 
-## Unreleased
+## Unreleased (after v0.2.0)
+
+- **Retries follow the request's repeatability.** Before, every request was
+  retried on 408, 425, 429, 500, 502, 503, 504 and on any transport error, so a
+  POST the platform had applied was sent again when its answer was lost (a
+  provisioning retried after a gateway 502 was refused 409
+  `ALREADY_PROVISIONED`, and its one-time secrets were gone; a create could
+  make a duplicate). Now a POST or PATCH is not repeated after 500, 502, 503,
+  504 or a transport failure after the request may have been sent; only the
+  syncs, `FieldTokens.Introspect` and `Router.InPipelineBatch` are marked
+  repeatable. 408, 425, 429 and failures before sending are still retried for
+  every request. See "Retries" above.
+- **New `*client.OutcomeUnknownError` and `client.IsOutcomeUnknown`**: a
+  non-repeatable request that ends with 502, 503, 504 or a transport failure
+  after sending returns it instead of the bare `*APIError` or transport error.
+  It unwraps to them, so `errors.As(err, &apiErr)` still sees a 502. To adapt:
+  test `client.IsOutcomeUnknown(err)` where you create or change something,
+  read the state (for a provisioning, `Applications.GetServiceAccount`), and
+  send again only if it was not applied. A POST 500 is no longer retried.
+- **New `FlowCatalystClient.PostRepeatable`** for a custom POST that is safe
+  to send twice.
+- **`WithTimeout` bounds each attempt**, not all attempts together, so a
+  repeatable request that times out can be retried. With the defaults a call
+  can now take up to three timeouts plus the delays; bound it with the
+  context.
+- **`WithRetry(0, ...)` makes one request** (it made none and returned nil).
+- **A DELETE that answers 404 on a retry** after an unknown outcome succeeds.
+- **`Applications.GetServiceAccount` is back**: `GET
+  /api/applications/{id}/service-account` (new on the platform) returns the
+  application's `*ServiceAccountResponse` (no secret); 404 when the
+  application is unknown or has no account; needs read access to the
+  application and `service-account:view`. The earlier advice to call
+  `ServiceAccounts().Get` with the application's `serviceAccountId` was wrong:
+  that is the id of the account's service principal, not of the service
+  account, so the lookup answers 404.
+
+## v0.2.0
 
 Security fixes; behaviour changes:
 
@@ -515,9 +594,9 @@ These signatures changed:
   platform answers a bare array). `ScheduledJobs.Fire` also carries `id` and
   `scheduledJobId`.
 - **Routes the platform does not have, removed**: `Applications.GetServiceAccount`
-  (`GET /api/applications/{id}/service-account` does not exist; read the
-  account with the new `ServiceAccounts().Get`, and point an application at one
-  with the new `Applications.LinkServiceAccount`) and
+  (`GET /api/applications/{id}/service-account` did not exist then; it is back,
+  see Unreleased; point an application at an account with the new
+  `Applications.LinkServiceAccount`) and
   `Applications.UpdateClientConfig` (`PUT .../clients/{clientId}` does not
   exist; use `Applications.GetClientConfig`, `EnableForClient` and
   `DisableForClient`). `ClientConfigRequest` and `SuccessResponse` are gone.
